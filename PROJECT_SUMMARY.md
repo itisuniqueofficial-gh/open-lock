@@ -48,6 +48,13 @@ working-tree edits.
 
 **Git remote / repository:** the project now lives in **`github.com/itisuniqueofficial-gh/open-lock`** (private). The rebranded tree, generated launcher icons, and CI/CD workflows are pushed there. Signing secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD`, `ANDROID_KEY_ALIAS`) must be added by the maintainer in repo Settings → Secrets before tagging a release; they are not committed and cannot be generated here.
 
+**GitHub-first automation (this revision)**
+- Repo is the single source of truth; build/test/sign/release all run on GitHub Actions (no local steps). See RELEASING.md "GitHub-first automation architecture".
+- `ci.yml` (push to `main` + PRs): `guards` job (blocks old ids `dev.abdullah.openlock` / `MalicKAbdullah/openlock`, committed keystores/`key.properties`, missing icon/release-config/package/label) + `verify` job (icons, format, analyze, test, debug APK build **and** aapt package/label check, artifact upload w/ 14-day retention). PR checks handled here (no separate `pr.yml`). Permissions `contents: read`; concurrency dedupes runs.
+- `release.yml` (tags `v*` + dispatch): validates tag == `v<pubspec version>`, format/analyze/test, signs from secrets, builds universal+split APKs + AAB, verifies signature + package + label + versionName + **versionCode**, verifies AAB archive, generates changelog, publishes GitHub Release; deletes signing material `if: always()`. Permissions `contents: write`.
+- `dependabot.yml`: weekly PRs for `github-actions`, `pub`, `gradle` (no auto-merge). Dependabot alerts + automated security fixes enabled on the repo.
+- CodeQL + PR dependency-review are **documented, not committed** — they need GitHub Advanced Security on a private repo (ready snippet in RELEASING.md). Branch protection needs GitHub Pro/public repo (403 on current plan) — manual settings documented. Rollback (fix-forward patch, immutable tags) documented.
+
 ### RECOMMENDED FUTURE IMPROVEMENTS (not implemented here)
 - Add JVM unit tests for the Kotlin mirror (`LockLogic`, `PinVerifier`) to fully close the dual-implementation drift gap (only Dart-side conformance constants are asserted now).
 - Verify the downloaded update APK's signature/hash before install (the update download lives in the external `core_update` package).
