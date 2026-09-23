@@ -70,10 +70,10 @@ flutter {
 }
 
 dependencies {
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Encrypted config store the native monitor reads (EncryptedSharedPreferences).
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Fingerprint / face unlock on the lock screen.
     implementation("androidx.biometric:biometric:1.1.0")
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.0")
 }
