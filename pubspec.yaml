@@ -26,7 +26,7 @@ dependencies:
   cryptography: ^2.7.0
 
   # Biometric unlock
-  local_auth: ^2.3.0
+  local_auth: ^3.0.2
 
   # Direct platform dep — di.dart constructs FlutterSecureStorage
   flutter_secure_storage: ^9.2.2
