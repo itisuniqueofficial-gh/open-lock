@@ -1,9 +1,12 @@
 name: CI
 
-# Runs on every push and pull request. Fails the build on any formatting,
-# analysis, or test error (no silent skips).
+# Runs on pushes to main and on every pull request. Feature branches get CI via
+# their PR (avoids duplicate runs). Fails on any formatting, analysis, test,
+# build, or repository-hygiene error — nothing is hidden. Releases are never
+# produced here (see release.yml, tag-triggered only).
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -15,8 +18,36 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.41.3"
+  APP_ID: "com.itisuniqueofficial.openlock"
+  APP_LABEL: "Open Lock"
 
 jobs:
+  guards:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: No old identifiers, no committed secrets, required assets present
+        run: |
+          fail=0
+          # Scan actual app source/config only (docs/workflows legitimately
+          # mention the old identifiers when describing the migration).
+          if grep -RIn 'dev\.abdullah\.openlock' lib android pubspec.yaml; then
+            echo "::error::old package id dev.abdullah.openlock found in source"; fail=1; fi
+          if grep -RIn 'MalicKAbdullah/openlock' lib android pubspec.yaml; then
+            echo "::error::old repository reference MalicKAbdullah/openlock found in source"; fail=1; fi
+          # No signing material committed.
+          if git ls-files | grep -E '(^|/)key\.properties$|\.jks$|\.keystore$'; then
+            echo "::error::signing material must never be committed"; fail=1; fi
+          # Required assets / config.
+          test -s icons/icon.png || { echo "::error::master icon icons/icon.png missing"; fail=1; }
+          test -f .github/workflows/release.yml || { echo "::error::release workflow missing"; fail=1; }
+          grep -q "applicationId = \"${APP_ID}\"" android/app/build.gradle.kts || { echo "::error::applicationId != ${APP_ID}"; fail=1; }
+          grep -q "android:label=\"${APP_LABEL}\"" android/app/src/main/AndroidManifest.xml || { echo "::error::app label != ${APP_LABEL}"; fail=1; }
+          exit $fail
+
   verify:
     name: Format · Analyze · Test · Build
     runs-on: ubuntu-latest
@@ -65,9 +96,20 @@ jobs:
       - name: Build debug APK
         run: flutter build apk --debug
 
+      - name: Verify debug APK package and label
+        run: |
+          set -e
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          if [ -x "$BT/aapt" ]; then BADGING=$("$BT/aapt" dump badging "$APK"); else BADGING=$("$BT/aapt2" dump badging "$APK"); fi
+          echo "$BADGING" | grep -E "package:|application-label:" | head -2
+          echo "$BADGING" | grep -q "package: name='${APP_ID}'" || { echo "::error::debug APK package != ${APP_ID}"; exit 1; }
+          echo "$BADGING" | grep -q "application-label:'${APP_LABEL}'" || { echo "::error::debug APK label != ${APP_LABEL}"; exit 1; }
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: open-lock-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
