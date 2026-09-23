@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: No old identifiers, no committed secrets, required assets present
         run: |
@@ -53,10 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -107,7 +107,7 @@ jobs:
           echo "$BADGING" | grep -q "application-label:'${APP_LABEL}'" || { echo "::error::debug APK label != ${APP_LABEL}"; exit 1; }
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: open-lock-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
