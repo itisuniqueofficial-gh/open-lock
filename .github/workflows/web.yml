@@ -49,7 +49,7 @@ jobs:
         run: npm run check
 
       - name: Assemble deployable site
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         run: |
           rm -rf _site
           mkdir _site
@@ -57,14 +57,18 @@ jobs:
           echo "Assembled $(find _site -type f | wc -l) files for Pages"
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: web/_site
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name != 'pull_request'
+    # Deploys only when the maintainer has enabled Pages and set the repo
+    # variable ENABLE_PAGES=true (Settings → Secrets and variables → Actions →
+    # Variables). Pages needs the repo to be public or a plan that supports
+    # private Pages. Until then this job is skipped so main stays green.
+    if: github.event_name != 'pull_request' && vars.ENABLE_PAGES == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:
