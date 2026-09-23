@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    * {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+  }
+  :focus-visible {
+    outline: 3px solid #0969f7;
+    outline-offset: 2px;
+  }
+  a {
+    @apply underline-offset-2;
+  }
+}
+
+@layer components {
+  .wrap {
+    @apply mx-auto w-full max-w-wrap px-4 sm:px-6;
+  }
+  .eyebrow {
+    @apply font-mono text-xs font-bold uppercase tracking-[0.2em] text-ol-blue;
+  }
+  .h-display {
+    @apply text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-5xl md:text-6xl;
+  }
+  .h-section {
+    @apply text-2xl font-extrabold uppercase tracking-tight sm:text-3xl;
+  }
+  .prose-lead {
+    @apply text-base leading-relaxed text-muted sm:text-lg;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 border-2 border-ink px-4 py-2.5 text-sm font-bold uppercase tracking-wide no-underline transition-colors;
+  }
+  .btn-primary {
+    @apply bg-ink text-paper hover:bg-ol-blue hover:border-ol-blue focus-visible:bg-ol-blue;
+  }
+  .btn-ghost {
+    @apply bg-paper text-ink hover:bg-ink hover:text-paper;
+  }
+  .btn-blue {
+    @apply border-ol-blue bg-ol-blue text-paper hover:bg-ol-blue-dark hover:border-ol-blue-dark;
+  }
+  .btn[aria-disabled="true"] {
+    @apply cursor-not-allowed border-dashed text-muted hover:bg-paper hover:text-muted;
+  }
+  .card {
+    @apply border-2 border-ink bg-paper p-5;
+  }
+  .card-flat {
+    @apply border-2 border-ink bg-smoke p-5;
+  }
+  .section {
+    @apply border-t-2 border-ink py-12 sm:py-16;
+  }
+  .nav-link {
+    @apply px-2 py-1 text-sm font-bold uppercase tracking-wide text-ink no-underline hover:text-ol-blue;
+  }
+  .tag {
+    @apply inline-block border border-ink px-2 py-0.5 font-mono text-[0.7rem] uppercase tracking-wide;
+  }
+  .kv {
+    @apply flex items-baseline justify-between gap-4 border-b border-ink/20 py-2 text-sm;
+  }
+  .link {
+    @apply font-semibold text-ol-blue underline decoration-2 underline-offset-2 hover:text-ol-blue-dark;
+  }
+}

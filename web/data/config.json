@@ -1,0 +1,18 @@
+{
+  "appName": "Open Lock",
+  "tagline": "A privacy-focused, open-source Android app locker.",
+  "package": "com.itisuniqueofficial.openlock",
+  "maintainer": "It Is Unique Official",
+  "developer": "Jaydatt Khodave",
+  "websiteUrl": "https://openlock.itisuniqueofficial.com",
+  "developerUrl": "https://jaydatt.pages.dev",
+  "githubRepo": "itisuniqueofficial-gh/open-lock",
+  "githubUrl": "https://github.com/itisuniqueofficial-gh/open-lock",
+  "githubReleasesUrl": "https://github.com/itisuniqueofficial-gh/open-lock/releases",
+  "githubIssuesUrl": "https://github.com/itisuniqueofficial-gh/open-lock/issues",
+  "githubDiscussionsUrl": "https://github.com/itisuniqueofficial-gh/open-lock/discussions",
+  "githubSecurityUrl": "https://github.com/itisuniqueofficial-gh/open-lock/security",
+  "playStoreUrl": null,
+  "license": "MIT",
+  "minSdkName": "Android 7.0 (API 24)"
+}
