@@ -1,0 +1,20 @@
+{
+  "name": "open-lock-website",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Official website for Open Lock — a privacy-focused, open-source Android app locker.",
+  "license": "MIT",
+  "scripts": {
+    "build:data": "node scripts/build-data.js",
+    "build:css": "tailwindcss -i ./src/css/input.css -o ./assets/css/tailwind.css --minify",
+    "build": "npm run build:data && npm run build:css",
+    "dev": "tailwindcss -i ./src/css/input.css -o ./assets/css/tailwind.css --watch",
+    "check": "node scripts/validate.js",
+    "lint": "node scripts/validate.js"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.13",
+    "postcss": "^8.4.47",
+    "autoprefixer": "^10.4.20"
+  }
+}
