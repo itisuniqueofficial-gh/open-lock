@@ -1,0 +1,87 @@
+name: openlock
+description: Open Lock — an offline, open-source app lock that guards your apps behind a PIN or fingerprint, with device-admin uninstall protection.
+publish_to: none
+version: 1.5.0+7
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.19.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Navigation
+  go_router: ^14.2.0
+
+  # Utilities
+  uuid: ^4.4.0
+  intl: ^0.19.0
+  path_provider: ^2.1.3
+
+  # Cross-language PIN verifier hashing (PBKDF2-HMAC-SHA256, mirrored in Kotlin)
+  cryptography: ^2.7.0
+
+  # Biometric unlock
+  local_auth: ^2.3.0
+
+  # Direct platform dep — di.dart constructs FlutterSecureStorage
+  flutter_secure_storage: ^9.2.2
+
+  # Shared foundation, pulled from the secure-suite-core repository.
+  # (Local development uses pubspec_overrides.yaml to resolve these by path.)
+  core_crypto:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_crypto
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+  core_storage:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_storage
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+  core_security:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_security
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+  core_theme:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_theme
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+  core_ui:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_ui
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+  core_update:
+    git:
+      url: https://github.com/MalicKAbdullah/secure-suite-core.git
+      path: core_update
+      ref: 2e656ff9d26a8ba458438842096a081a0339b308
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  fake_async: ^1.3.1
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  # Master source of truth is icons/icon.png. The Android launcher resources in
+  # android/app/src/main/res are generated from it and committed; this block lets
+  # `dart run flutter_launcher_icons` reproduce the legacy + adaptive layers. The
+  # round icon and monochrome (themed) layer are hand-maintained vectors.
+  image_path: "icons/icon.png"
+  adaptive_icon_background: "#0969F7"
+  adaptive_icon_foreground: "icons/icon.png"
+  min_sdk_android: 24
+
+flutter:
+  uses-material-design: true
