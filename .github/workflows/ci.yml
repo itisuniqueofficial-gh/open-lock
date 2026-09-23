@@ -32,12 +32,12 @@ jobs:
       - name: No old identifiers, no committed secrets, required assets present
         run: |
           fail=0
-          # No old package id (PROJECT_SUMMARY documents the migration, so skip it).
-          if grep -RIn --exclude-dir=.git --exclude=PROJECT_SUMMARY.md 'dev\.abdullah\.openlock' .; then
-            echo "::error::old package id dev.abdullah.openlock found"; fail=1; fi
-          # No old repository reference.
-          if grep -RIn --exclude-dir=.git --exclude=PROJECT_SUMMARY.md 'MalicKAbdullah/openlock' .; then
-            echo "::error::old repository reference MalicKAbdullah/openlock found"; fail=1; fi
+          # Scan actual app source/config only (docs/workflows legitimately
+          # mention the old identifiers when describing the migration).
+          if grep -RIn 'dev\.abdullah\.openlock' lib android pubspec.yaml; then
+            echo "::error::old package id dev.abdullah.openlock found in source"; fail=1; fi
+          if grep -RIn 'MalicKAbdullah/openlock' lib android pubspec.yaml; then
+            echo "::error::old repository reference MalicKAbdullah/openlock found in source"; fail=1; fi
           # No signing material committed.
           if git ls-files | grep -E '(^|/)key\.properties$|\.jks$|\.keystore$'; then
             echo "::error::signing material must never be committed"; fail=1; fi
