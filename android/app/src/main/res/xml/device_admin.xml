@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Minimal device-admin policy. OpenLock requests device-admin status purely so
+    Android blocks the app from being uninstalled while "Prevent uninstall" is
+    on. force-lock is declared to satisfy the policy schema; OpenLock never
+    actually invokes it or any other management capability.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+    </uses-policies>
+</device-admin>

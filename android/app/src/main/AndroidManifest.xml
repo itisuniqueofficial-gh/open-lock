@@ -1,0 +1,125 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Detect which app is in the foreground (special access, granted by the
+         user under Settings → Special app access → Usage access). -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"/>
+    <!-- Draw the lock screen on top of other apps, and start it from the
+         background (overlay permission exempts background-activity-start). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- In-app update check (GitHub release lookup) — the only network use. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Install the downloaded update APK (in-app update). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Persistent monitor foreground service (Android 9+ / 14 special use). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Restart the monitor after a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Ask to be excluded from battery optimization for reliability. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Fingerprint / face unlock on the lock screen. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
+    <!-- Silent front-camera capture for the intruder log (optional feature). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Needed to enumerate the launchable apps the user can choose to lock.
+         OpenLock only reads app labels/icons/package names locally; nothing
+         about installed apps ever leaves the device. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission"/>
+
+    <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
+
+    <application
+        android:label="Open Lock"
+        android:name="${applicationName}"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- The on-top lock screen shown over a locked app. Native for
+             reliability; dark + amber to match the brand; FLAG_SECURE set in
+             code. Not exported — only OpenLock's own service launches it. -->
+        <activity
+            android:name=".LockActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity="com.itisuniqueofficial.openlock.lock"
+            android:excludeFromRecents="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/LockTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"/>
+
+        <!-- Persistent foreground service that watches the foreground app. -->
+        <service
+            android:name=".OpenLockMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="App lock: detect the foreground app to lock chosen apps behind a PIN."/>
+        </service>
+
+        <!-- Device administrator for uninstall protection. Being an active
+             admin makes Android block uninstall until it is deactivated;
+             OpenLock only deactivates it after in-app PIN/biometric re-auth. -->
+        <receiver
+            android:name=".OpenLockDeviceAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin"/>
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Restart the monitor after reboot. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Enumerate launchable apps for the picker. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
+    </queries>
+</manifest>
