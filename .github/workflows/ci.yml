@@ -6,7 +6,7 @@ name: CI
 # produced here (see release.yml, tag-triggered only).
 on:
   push:
-    branches: [main]
+    branches: [main, arena/01a0e991-open-lock]
   pull_request:
   workflow_dispatch:
 
