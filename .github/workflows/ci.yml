@@ -107,6 +107,8 @@ jobs:
                   continue
               if event.get('type') == 'error':
                   print('::error::' + event.get('error', 'Flutter test error').replace('\n', ' | '))
+              if event.get('type') == 'testDone' and event.get('result') == 'error':
+                  print('::error::failed test: ' + repr(event))
           PY
           exit $code
 
