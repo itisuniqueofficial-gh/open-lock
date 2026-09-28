@@ -85,8 +85,20 @@ jobs:
           test -s android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           echo "launcher icon resources present"
 
-      - name: Verify formatting
-        run: dart format --output=none --set-exit-if-changed .
+      - name: Apply and verify formatting
+        run: |
+          dart format .
+          git diff --binary > /tmp/open-lock-format.patch
+          git diff --exit-code -- . ':!pubspec.lock'
+
+      - name: Upload formatter diff when formatting fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-lock-format-diff
+          path: /tmp/open-lock-format.patch
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Analyze (zero tolerance)
         run: dart analyze --fatal-infos
