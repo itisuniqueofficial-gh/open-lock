@@ -140,7 +140,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ListTile(
               leading: const Icon(Icons.verified_user_outlined),
               title: const Text('Permissions & status'),
-              subtitle: const Text('Enforcement method and live permission status'),
+              subtitle:
+                  const Text('Enforcement method and live permission status'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => context.push(AppRoutes.permissions),
             ),

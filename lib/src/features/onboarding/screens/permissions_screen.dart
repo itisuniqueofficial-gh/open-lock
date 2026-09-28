@@ -42,7 +42,9 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
   Future<void> _selectMethod(EnforcementMethod? method) async {
     if (method == null) return;
     try {
-      await ref.read(configControllerProvider.notifier).setEnforcementMethod(method);
+      await ref
+          .read(configControllerProvider.notifier)
+          .setEnforcementMethod(method);
       await ref.read(permissionsControllerProvider.notifier).refresh();
     } catch (_) {
       if (!mounted) return;

@@ -51,9 +51,8 @@ final class PermissionStates {
 
   /// Only the permission required by the selected method is authoritative.
   /// Usage Access also needs an overlay to present the native lock activity.
-  bool get canEnforce => usesAccessibility
-      ? accessibilityService
-      : usageAccess && overlay;
+  bool get canEnforce =>
+      usesAccessibility ? accessibilityService : usageAccess && overlay;
 
   /// Everything required by the selected method is actually available.
   bool get protectionActive => canEnforce && serviceRunning;
@@ -73,8 +72,7 @@ final class PermissionStates {
         notifications: notifications ?? this.notifications,
         batteryExempt: batteryExempt ?? this.batteryExempt,
         serviceRunning: serviceRunning ?? this.serviceRunning,
-        accessibilityService:
-            accessibilityService ?? this.accessibilityService,
+        accessibilityService: accessibilityService ?? this.accessibilityService,
         enforcementMethod: enforcementMethod ?? this.enforcementMethod,
       );
 }
