@@ -81,10 +81,10 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
           children: [
             _StatusBanner(states: states, method: nativeMethod),
             const SizedBox(height: AppSpacing.lg),
-            Text('1. Choose enforcement method', style: AppTextStyles.h4),
+            const Text('1. Choose enforcement method', style: AppTextStyles.h4),
             const SizedBox(height: AppSpacing.sm),
             DropdownButtonFormField<EnforcementMethod>(
-              value: method,
+              initialValue: method,
               decoration: const InputDecoration(
                 labelText: 'Enforcement method',
                 helperText: 'Only the selected method is used for protection.',
@@ -100,7 +100,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
               onChanged: _selectMethod,
             ),
             const SizedBox(height: AppSpacing.lg),
-            Text('2. Enable the selected permission', style: AppTextStyles.h4),
+            const Text('2. Enable the selected permission', style: AppTextStyles.h4),
             const SizedBox(height: AppSpacing.sm),
             if (method == EnforcementMethod.accessibility) ...[
               _PermissionTile(
@@ -112,7 +112,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
                 required: true,
                 onFix: controller.requestAccessibility,
               ),
-              _MethodNote(
+              const _MethodNote(
                 text:
                     'Accessibility is event-driven and does not need a persistent Open Lock notification. Android still lets you disable it at any time.',
               ),
@@ -135,7 +135,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
                 required: true,
                 onFix: controller.requestOverlay,
               ),
-              _MethodNote(
+              const _MethodNote(
                 text:
                     'Usage Access uses a lightweight foreground service while selected, so Android requires an ongoing service notification.',
               ),
@@ -160,7 +160,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
                 onFix: controller.requestNotifications,
               ),
             const SizedBox(height: AppSpacing.lg),
-            Text('3. Select apps to lock', style: AppTextStyles.h4),
+            const Text('3. Select apps to lock', style: AppTextStyles.h4),
             const SizedBox(height: AppSpacing.xs),
             Text(
               'Choose protected apps and configure authentication in the app list and settings.',
