@@ -143,7 +143,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
             ],
             _PermissionTile(
               icon: Icons.battery_saver_rounded,
-              title: 'Battery optimization',
+              title: 'Ignore battery optimization',
               subtitle:
                   'Optional. Some manufacturers restrict background work when the phone is idle.',
               granted: states.batteryExempt,

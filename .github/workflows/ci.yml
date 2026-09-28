@@ -6,7 +6,7 @@ name: CI
 # produced here (see release.yml, tag-triggered only).
 on:
   push:
-    branches: [main, arena/01a0e991-open-lock]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FLUTTER_VERSION: "3.41.3"
@@ -92,34 +92,7 @@ jobs:
         run: dart analyze --fatal-infos
 
       - name: Test
-        run: |
-          set +e
-          flutter test --machine > /tmp/open-lock-test.json
-          code=$?
-          cat /tmp/open-lock-test.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          for line in Path('/tmp/open-lock-test.json').read_text().splitlines():
-              try:
-                  event = json.loads(line)
-              except json.JSONDecodeError:
-                  continue
-              if event.get('type') == 'error':
-                  print('::error::' + event.get('error', 'Flutter test error').replace('\n', ' | '))
-              if event.get('type') == 'testDone' and event.get('result') == 'error':
-                  print('::error::failed test: ' + repr(event))
-          PY
-          if [ "$code" -ne 0 ]; then
-            cp /tmp/open-lock-test.json TEST_FAILURE.json
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add TEST_FAILURE.json
-            git commit -m "ci: capture Flutter test failure"
-            branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-            git push origin "HEAD:${branch}"
-          fi
-          exit $code
+        run: flutter test
 
       - name: Build debug APK
         run: flutter build apk --debug
