@@ -19,6 +19,7 @@ final class PermissionsController extends AsyncNotifier<PermissionStates> {
   IEnforcementBridge get _bridge => ref.read(enforcementBridgeProvider);
 
   Future<void> requestUsageAccess() => _bridge.requestUsageAccess();
+  Future<void> requestAccessibility() => _bridge.requestAccessibilityService();
   Future<void> requestOverlay() => _bridge.requestOverlayPermission();
   Future<void> requestBattery() => _bridge.requestBatteryExemption();
   Future<void> requestNotifications() =>

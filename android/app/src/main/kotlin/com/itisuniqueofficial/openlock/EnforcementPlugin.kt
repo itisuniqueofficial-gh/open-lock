@@ -1,7 +1,6 @@
 package com.itisuniqueofficial.openlock
 
 import android.app.Activity
-import android.app.AppOpsManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -12,9 +11,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
-import android.os.Process
 import android.provider.Settings
-import android.util.Base64
+import android.view.accessibility.AccessibilityManager
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import io.flutter.plugin.common.BinaryMessenger
@@ -23,20 +21,16 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
 /**
- * Handles the `openlock/enforcement` MethodChannel: config push, installed-app
- * enumeration, permission checks/requests, service control, and the intruder
- * log. Everything here is local to the device.
+ * The Flutter configuration bridge. It reports live Android state and writes a
+ * validated native projection; it does not run enforcement itself.
  */
 class EnforcementPlugin(private val activity: Activity) :
     MethodChannel.MethodCallHandler {
-
     private var channel: MethodChannel? = null
     private val store = ConfigStore(activity)
 
     fun register(messenger: BinaryMessenger) {
-        channel = MethodChannel(messenger, CHANNEL).also {
-            it.setMethodCallHandler(this)
-        }
+        channel = MethodChannel(messenger, CHANNEL).also { it.setMethodCallHandler(this) }
     }
 
     fun dispose() {
@@ -48,13 +42,36 @@ class EnforcementPlugin(private val activity: Activity) :
         when (call.method) {
             "pushConfig" -> {
                 val config = call.argument<String>("config")
-                if (config != null) store.saveConfig(config)
-                result.success(null)
+                if (config == null) {
+                    result.error("invalid_config", "Missing native configuration", null)
+                    return
+                }
+                runCatching {
+                    store.saveConfig(config)
+                    LockEnforcementManager.initialize(activity)
+                    if (store.enforcementMethod() == LockEnforcementManager.METHOD_USAGE) {
+                        OpenLockMonitorService.startIfNeeded(activity)
+                    } else {
+                        activity.stopService(Intent(activity, OpenLockMonitorService::class.java))
+                        LockSession.clearAll()
+                    }
+                }.onSuccess { result.success(null) }
+                    .onFailure { error ->
+                        result.error(
+                            "config_not_saved",
+                            "Native enforcement configuration was not accepted",
+                            error.message,
+                        )
+                    }
             }
             "getInstalledApps" -> result.success(installedApps())
             "getPermissionStates" -> result.success(permissionStates())
             "requestUsageAccess" -> {
                 launch(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                result.success(null)
+            }
+            "requestAccessibilityService" -> {
+                launch(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 result.success(null)
             }
             "requestOverlayPermission" -> {
@@ -67,20 +84,26 @@ class EnforcementPlugin(private val activity: Activity) :
                 result.success(null)
             }
             "requestBatteryExemption" -> {
-                requestBatteryExemption()
+                launch(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${activity.packageName}"),
+                    ),
+                )
                 result.success(null)
             }
             "requestNotificationPermission" -> {
                 requestNotifications()
                 result.success(null)
             }
-            "isServiceRunning" -> result.success(OpenLockMonitorService.isRunning)
+            "isServiceRunning" -> result.success(selectedSourceRunning())
             "startService" -> {
-                startService()
+                OpenLockMonitorService.startIfNeeded(activity)
                 result.success(null)
             }
             "stopService" -> {
-                stopService()
+                activity.stopService(Intent(activity, OpenLockMonitorService::class.java))
+                LockSession.clearAll()
                 result.success(null)
             }
             "isDeviceAdminActive" -> result.success(isDeviceAdminActive())
@@ -94,11 +117,12 @@ class EnforcementPlugin(private val activity: Activity) :
             }
             "getAutoLockedPackages" -> result.success(store.autoLockedPackages().toList())
             "removeAutoLocked" -> {
-                call.argument<String>("packageName")?.let { store.removeAutoLocked(it) }
+                call.argument<String>("packageName")?.let(store::removeAutoLocked)
                 result.success(null)
             }
-            "getIntruderRecords" -> result.success(store.intruderRecords())            "deleteIntruderRecord" -> {
-                call.argument<String>("id")?.let { store.deleteIntruder(it) }
+            "getIntruderRecords" -> result.success(store.intruderRecords())
+            "deleteIntruderRecord" -> {
+                call.argument<String>("id")?.let(store::deleteIntruder)
                 result.success(null)
             }
             "clearIntruderRecords" -> {
@@ -109,8 +133,6 @@ class EnforcementPlugin(private val activity: Activity) :
         }
     }
 
-    // --- Installed apps -----------------------------------------------------
-
     private fun installedApps(): List<Map<String, Any?>> {
         val pm = activity.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -119,8 +141,7 @@ class EnforcementPlugin(private val activity: Activity) :
         val apps = ArrayList<Map<String, Any?>>()
         for (info in resolveInfos) {
             val pkg = info.activityInfo?.packageName ?: continue
-            if (pkg == activity.packageName) continue
-            if (!seen.add(pkg)) continue
+            if (pkg == activity.packageName || !seen.add(pkg)) continue
             val label = info.loadLabel(pm)?.toString() ?: pkg
             val icon = runCatching { drawableToBase64(info.loadIcon(pm)) }.getOrNull()
             apps.add(mapOf("packageName" to pkg, "label" to label, "icon" to icon))
@@ -135,70 +156,74 @@ class EnforcementPlugin(private val activity: Activity) :
         val bitmap = if (drawable is BitmapDrawable && drawable.bitmap != null) {
             Bitmap.createScaledBitmap(drawable.bitmap, size, size, true)
         } else {
-            val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bmp)
-            drawable.setBounds(0, 0, size, size)
-            drawable.draw(canvas)
-            bmp
+            Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
+                val canvas = Canvas(bitmap)
+                drawable.setBounds(0, 0, size, size)
+                drawable.draw(canvas)
+            }
         }
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        return android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
     }
 
-    // --- Permissions --------------------------------------------------------
-
-    private fun permissionStates(): Map<String, Any?> = mapOf(
-        "usageAccess" to hasUsageAccess(),
-        "overlay" to hasOverlay(),
-        "notifications" to hasNotifications(),
-        "batteryExempt" to isBatteryExempt(),
-        "serviceRunning" to OpenLockMonitorService.isRunning,
-    )
-
-    private fun hasUsageAccess(): Boolean {
-        return try {
-            val appOps = activity.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                appOps.unsafeCheckOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(),
-                    activity.packageName,
-                )
+    private fun permissionStates(): Map<String, Any?> {
+        val selected = store.enforcementMethod()
+        return mapOf(
+            "usageAccess" to hasUsageAccess(),
+            "accessibilityService" to hasAccessibilityService(),
+            "overlay" to Settings.canDrawOverlays(activity),
+            "notifications" to NotificationManagerCompat.from(activity).areNotificationsEnabled(),
+            "batteryExempt" to isBatteryExempt(),
+            "enforcementMethod" to selected,
+            "serviceRunning" to if (selected == LockEnforcementManager.METHOD_ACCESSIBILITY) {
+                hasAccessibilityService()
             } else {
-                @Suppress("DEPRECATION")
-                appOps.checkOpNoThrow(
-                    AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(),
-                    activity.packageName,
-                )
-            }
-            mode == AppOpsManager.MODE_ALLOWED
-        } catch (e: Exception) {
-            false
+                OpenLockMonitorService.isRunning
+            },
+        )
+    }
+
+    private fun selectedSourceRunning(): Boolean {
+        return if (store.enforcementMethod() == LockEnforcementManager.METHOD_ACCESSIBILITY) {
+            hasAccessibilityService()
+        } else {
+            OpenLockMonitorService.isRunning
         }
     }
 
-    private fun hasOverlay(): Boolean = Settings.canDrawOverlays(activity)
+    private fun hasUsageAccess(): Boolean = OpenLockMonitorService.hasUsageAccess(activity)
 
-    private fun hasNotifications(): Boolean =
-        NotificationManagerCompat.from(activity).areNotificationsEnabled()
+    private fun hasAccessibilityService(): Boolean {
+        return try {
+            val manager =
+                activity.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+            val enabled = manager.getEnabledAccessibilityServiceList(
+                android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK,
+            )
+            enabled.any { info ->
+                info.resolveInfo?.serviceInfo?.packageName == activity.packageName &&
+                    info.resolveInfo?.serviceInfo?.name ==
+                    OpenLockAccessibilityService::class.java.name
+            } || Settings.Secure.getString(
+                activity.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            )?.split(':')?.any { value ->
+                ComponentName.unflattenFromString(value)?.className ==
+                    OpenLockAccessibilityService::class.java.name
+            } == true
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun isBatteryExempt(): Boolean {
         return try {
-            val pm = activity.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            pm.isIgnoringBatteryOptimizations(activity.packageName)
-        } catch (e: Exception) {
+            val power = activity.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            power.isIgnoringBatteryOptimizations(activity.packageName)
+        } catch (_: Exception) {
             false
         }
-    }
-
-    private fun requestBatteryExemption() {
-        val intent = Intent(
-            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-            Uri.parse("package:${activity.packageName}"),
-        )
-        launch(intent)
     }
 
     private fun requestNotifications() {
@@ -209,33 +234,12 @@ class EnforcementPlugin(private val activity: Activity) :
                 REQ_NOTIFICATIONS,
             )
         } else {
-            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
-            launch(intent)
+            launch(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName),
+            )
         }
     }
-
-    // --- Service control ----------------------------------------------------
-
-    private fun startService() {
-        val intent = Intent(activity, OpenLockMonitorService::class.java)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                activity.startForegroundService(intent)
-            } else {
-                activity.startService(intent)
-            }
-        }
-    }
-
-    private fun stopService() {
-        runCatching {
-            activity.stopService(Intent(activity, OpenLockMonitorService::class.java))
-        }
-        LockSession.clearAll()
-    }
-
-    // --- Device admin (uninstall protection) --------------------------------
 
     private fun adminComponent(): ComponentName =
         ComponentName(activity, OpenLockDeviceAdminReceiver::class.java)
@@ -244,17 +248,14 @@ class EnforcementPlugin(private val activity: Activity) :
         activity.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
 
     private fun isDeviceAdminActive(): Boolean =
-        runCatching { devicePolicyManager().isAdminActive(adminComponent()) }
-            .getOrDefault(false)
+        runCatching { devicePolicyManager().isAdminActive(adminComponent()) }.getOrDefault(false)
 
     private fun requestDeviceAdmin() {
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
             putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent())
             putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Open Lock uses device administrator access only to block itself " +
-                    "from being uninstalled while protection is on. It never " +
-                    "manages, locks, or wipes your device.",
+                "Open Lock uses device administrator access only to block itself from being uninstalled while protection is on. It never manages, locks, or wipes your device.",
             )
         }
         launch(intent)

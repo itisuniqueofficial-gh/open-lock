@@ -17,6 +17,23 @@ import java.util.UUID
 class ConfigStore(context: Context) {
 
     private val prefs: SharedPreferences = createPrefs(context.applicationContext)
+    @Volatile private var configLoaded = false
+    @Volatile private var cachedConfig: JSONObject? = null
+    @Volatile private var autoLockedLoaded = false
+    @Volatile private var cachedAutoLocked: Set<String> = emptySet()
+
+    init {
+        // Flutter and the native components each create a ConfigStore. The
+        // listener invalidates this instance's small in-memory projection when
+        // the other side commits a configuration change, avoiding disk reads on
+        // every foreground event.
+        prefs.registerOnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                KEY_CONFIG -> configLoaded = false
+                KEY_AUTOLOCKED -> autoLockedLoaded = false
+            }
+        }
+    }
 
     private fun createPrefs(context: Context): SharedPreferences {
         return try {
@@ -52,20 +69,56 @@ class ConfigStore(context: Context) {
         )
     }
 
+    /** Validates and durably commits the native projection before returning. */
+    @Synchronized
     fun saveConfig(json: String) {
-        prefs.edit().putString(KEY_CONFIG, json).apply()
+        val parsed = JSONObject(json)
+        check(prefs.edit().putString(KEY_CONFIG, parsed.toString()).commit()) {
+            "Could not persist native enforcement configuration"
+        }
+        cachedConfig = parsed
+        configLoaded = true
     }
 
+    @Synchronized
     private fun config(): JSONObject? {
-        val raw = prefs.getString(KEY_CONFIG, null) ?: return null
-        return try {
-            JSONObject(raw)
-        } catch (e: Exception) {
+        if (configLoaded) return cachedConfig
+        val raw = prefs.getString(KEY_CONFIG, null)
+        cachedConfig = try {
+            raw?.let { JSONObject(it) }
+        } catch (_: Exception) {
             null
         }
+        configLoaded = true
+        return cachedConfig
     }
 
     fun hasConfig(): Boolean = config() != null
+
+    fun enforcementMethod(): String =
+        config()?.optString("enforcementMethod", LockEnforcementManager.METHOD_USAGE)
+            ?: LockEnforcementManager.METHOD_USAGE
+
+    fun hasEnforcementWork(): Boolean {
+        val current = config() ?: return false
+        return ((current.optJSONArray("lockedPackages")?.length() ?: 0) > 0) ||
+            ((current.optJSONArray("schedules")?.length() ?: 0) > 0) ||
+            current.optBoolean("lockNewApps", false) ||
+            autoLockedPackages().isNotEmpty()
+    }
+
+    /** Returns a validated config update for the DeviceAdmin callback. */
+    fun configForAdminUpdate(active: Boolean): String? {
+        val current = config() ?: return null
+        current.put("preventUninstall", active)
+        return current.toString()
+    }
+
+    /** Keeps native uninstall-guard state accurate if Device Admin is disabled
+     * from Android Settings rather than through the Flutter UI. */
+    fun clearPreventUninstall() {
+        configForAdminUpdate(false)?.let(::saveConfig)
+    }
 
     fun lockedPackages(): Set<String> {
         val array = config()?.optJSONArray("lockedPackages") ?: return emptySet()
@@ -100,28 +153,47 @@ class ConfigStore(context: Context) {
     // Populated by the monitor's package-install receiver when [lockNewApps] is
     // on. Kept under a separate key so a Flutter config push never clobbers it.
 
+    @Synchronized
     fun autoLockedPackages(): Set<String> {
-        val raw = prefs.getString(KEY_AUTOLOCKED, null) ?: return emptySet()
-        return try {
-            val arr = JSONArray(raw)
-            val set = HashSet<String>(arr.length())
-            for (i in 0 until arr.length()) set.add(arr.optString(i))
-            set
-        } catch (e: Exception) {
-            emptySet()
+        if (!autoLockedLoaded) {
+            val raw = prefs.getString(KEY_AUTOLOCKED, null)
+            cachedAutoLocked = try {
+                val arr = if (raw == null) JSONArray() else JSONArray(raw)
+                buildSet {
+                    for (i in 0 until arr.length()) add(arr.optString(i))
+                }
+            } catch (_: Exception) {
+                emptySet()
+            }
+            autoLockedLoaded = true
         }
+        return HashSet(cachedAutoLocked)
     }
 
+    @Synchronized
     fun addAutoLocked(packageName: String) {
         val set = HashSet(autoLockedPackages())
         if (!set.add(packageName)) return
-        prefs.edit().putString(KEY_AUTOLOCKED, JSONArray(set.toList()).toString()).apply()
+        check(
+            prefs.edit()
+                .putString(KEY_AUTOLOCKED, JSONArray(set.toList()).toString())
+                .commit(),
+        ) { "Could not persist auto-locked package" }
+        cachedAutoLocked = set
+        autoLockedLoaded = true
     }
 
+    @Synchronized
     fun removeAutoLocked(packageName: String) {
         val set = HashSet(autoLockedPackages())
         if (!set.remove(packageName)) return
-        prefs.edit().putString(KEY_AUTOLOCKED, JSONArray(set.toList()).toString()).apply()
+        check(
+            prefs.edit()
+                .putString(KEY_AUTOLOCKED, JSONArray(set.toList()).toString())
+                .commit(),
+        ) { "Could not persist auto-locked package" }
+        cachedAutoLocked = set
+        autoLockedLoaded = true
     }
 
     fun pinHash(): String? = config()?.optString("pinHash")?.ifBlank { null }

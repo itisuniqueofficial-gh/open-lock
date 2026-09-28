@@ -124,6 +124,9 @@ final class FakeEnforcementBridge implements IEnforcementBridge {
   Future<void> requestUsageAccess() async {}
 
   @override
+  Future<void> requestAccessibilityService() async {}
+
+  @override
   Future<void> requestOverlayPermission() async {}
 
   @override

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Detects when a protected app is opened so Open Lock can show its authentication screen. Open Lock does not read window content.</string>
+</resources>

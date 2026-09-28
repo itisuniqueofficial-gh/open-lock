@@ -63,7 +63,7 @@
         <activity
             android:name=".LockActivity"
             android:exported="false"
-            android:launchMode="singleInstance"
+            android:launchMode="singleTask"
             android:taskAffinity="com.itisuniqueofficial.openlock.lock"
             android:excludeFromRecents="true"
             android:showWhenLocked="true"
@@ -81,6 +81,20 @@
                 android:value="App lock: detect the foreground app to lock chosen apps behind a PIN."/>
         </service>
 
+        <!-- Optional event-driven enforcement. Android binds this only after the
+             user explicitly enables it in Accessibility settings. -->
+        <service
+            android:name=".OpenLockAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config"/>
+        </service>
+
         <!-- Device administrator for uninstall protection. Being an active
              admin makes Android block uninstall until it is deactivated;
              OpenLock only deactivates it after in-app PIN/biometric re-auth. -->
@@ -93,6 +107,17 @@
                 android:resource="@xml/device_admin"/>
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- Keep Lock New Apps native-owned even when Flutter is closed. -->
+        <receiver
+            android:name=".PackagePolicyReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED"/>
+                <action android:name="android.intent.action.PACKAGE_REMOVED"/>
+                <data android:scheme="package"/>
             </intent-filter>
         </receiver>
 

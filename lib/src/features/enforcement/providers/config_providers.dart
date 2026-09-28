@@ -11,16 +11,28 @@ final class ConfigController extends AsyncNotifier<LockConfig> {
   Future<LockConfig> build() => ref.watch(configRepositoryProvider).load();
 
   Future<void> _apply(LockConfig next) async {
-    state = AsyncData(next);
-    await ref.read(configRepositoryProvider).save(next);
-    await pushToNative();
+    final previous = state.valueOrNull ?? LockConfig.empty;
+    try {
+      // Do not expose a successful switch until both encrypted persistence and
+      // the native enforcement layer have accepted the same configuration.
+      await ref.read(configRepositoryProvider).save(next);
+      await _pushConfig(next);
+      state = AsyncData(next);
+    } catch (error, stackTrace) {
+      state = AsyncData(previous);
+      // Best effort rollback keeps the Flutter file and native projection
+      // aligned when a platform channel or storage operation fails.
+      try {
+        await ref.read(configRepositoryProvider).save(previous);
+        await _pushConfig(previous);
+      } catch (_) {
+        // Preserve the original error; the UI can report that the update failed.
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
-  /// Rebuilds the native enforcement map from the current config plus the
-  /// stored PIN verifier and hands it to the native layer.
-  Future<void> pushToNative() async {
-    final config = state.valueOrNull;
-    if (config == null) return;
+  Future<void> _pushConfig(LockConfig config) async {
     final verifier = await ref.read(pinAuthServiceProvider).verifier();
     if (verifier == null) return; // no PIN yet — nothing to enforce
     final biometricEnabled =
@@ -32,6 +44,20 @@ final class ConfigController extends AsyncNotifier<LockConfig> {
             biometricEnabled: biometricEnabled,
           ),
         );
+  }
+
+  /// Rebuilds the native enforcement map from the current config plus the
+  /// stored PIN verifier and hands it to the native layer.
+  Future<void> pushToNative() async {
+    final config = state.valueOrNull;
+    if (config == null) return;
+    await _pushConfig(config);
+  }
+
+  Future<void> setEnforcementMethod(EnforcementMethod method) async {
+    final config = state.valueOrNull ?? LockConfig.empty;
+    if (config.enforcementMethod == method) return;
+    await _apply(config.copyWith(enforcementMethod: method));
   }
 
   Future<void> toggleApp(String packageName) async {

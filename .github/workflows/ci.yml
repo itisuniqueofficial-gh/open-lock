@@ -8,6 +8,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -106,10 +107,24 @@ jobs:
           echo "$BADGING" | grep -q "package: name='${APP_ID}'" || { echo "::error::debug APK package != ${APP_ID}"; exit 1; }
           echo "$BADGING" | grep -q "application-label:'${APP_LABEL}'" || { echo "::error::debug APK label != ${APP_LABEL}"; exit 1; }
 
-      - name: Upload debug APK
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Build release AAB
+        run: flutter build appbundle --release
+
+      - name: Verify release artifacts exist
+        run: |
+          test -s build/app/outputs/flutter-apk/app-release.apk
+          test -s build/app/outputs/bundle/release/app-release.aab
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: open-lock-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: open-lock-build-artifacts
+          path: |
+            build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
           retention-days: 14
