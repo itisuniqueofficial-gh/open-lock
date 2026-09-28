@@ -3,31 +3,26 @@ package com.itisuniqueofficial.openlock
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 
-/** Restarts the monitor service after a reboot or app update. */
+/**
+ * Restores the native enforcement projection after boot or an in-place app
+ * update. It can start Usage Access's required foreground service, but it can
+ * never grant Usage Access or enable Accessibility on the user's behalf.
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val action = intent.action
-        if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_MY_PACKAGE_REPLACED
-        ) {
-            return
-        }
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
+            intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
+        ) return
 
-        val store = ConfigStore(context)
-        val hasWork = store.lockedPackages().isNotEmpty() ||
-            store.schedules().length() > 0 ||
-            store.autoLockedPackages().isNotEmpty()
-        if (store.pinHash() == null || !hasWork) return
+        val appContext = context.applicationContext
+        val store = ConfigStore(appContext)
+        LockEnforcementManager.initialize(appContext)
 
-        val serviceIntent = Intent(context, OpenLockMonitorService::class.java)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
-            }
+        if (store.enforcementMethod() == LockEnforcementManager.METHOD_USAGE) {
+            OpenLockMonitorService.startIfNeeded(appContext)
         }
+        // AccessibilityService is intentionally not started programmatically.
+        // Android reconnects it when the user has enabled it in system Settings.
     }
 }

@@ -24,6 +24,8 @@ final class PermissionStates {
     required this.notifications,
     required this.batteryExempt,
     required this.serviceRunning,
+    this.accessibilityService = false,
+    this.enforcementMethod = 'usageAccess',
   });
 
   const PermissionStates.unknown()
@@ -31,18 +33,29 @@ final class PermissionStates {
         overlay = false,
         notifications = false,
         batteryExempt = false,
-        serviceRunning = false;
+        serviceRunning = false,
+        accessibilityService = false,
+        enforcementMethod = 'usageAccess';
 
   final bool usageAccess;
   final bool overlay;
   final bool notifications;
   final bool batteryExempt;
   final bool serviceRunning;
+  final bool accessibilityService;
 
-  /// The two permissions without which cross-app locking cannot work at all.
-  bool get canEnforce => usageAccess && overlay;
+  /// The native persisted selection, not a locally cached UI preference.
+  final String enforcementMethod;
 
-  /// Everything granted and the monitor actually running.
+  bool get usesAccessibility => enforcementMethod == 'accessibility';
+
+  /// Only the permission required by the selected method is authoritative.
+  /// Usage Access also needs an overlay to present the native lock activity.
+  bool get canEnforce => usesAccessibility
+      ? accessibilityService
+      : usageAccess && overlay;
+
+  /// Everything required by the selected method is actually available.
   bool get protectionActive => canEnforce && serviceRunning;
 
   PermissionStates copyWith({
@@ -51,6 +64,8 @@ final class PermissionStates {
     bool? notifications,
     bool? batteryExempt,
     bool? serviceRunning,
+    bool? accessibilityService,
+    String? enforcementMethod,
   }) =>
       PermissionStates(
         usageAccess: usageAccess ?? this.usageAccess,
@@ -58,6 +73,9 @@ final class PermissionStates {
         notifications: notifications ?? this.notifications,
         batteryExempt: batteryExempt ?? this.batteryExempt,
         serviceRunning: serviceRunning ?? this.serviceRunning,
+        accessibilityService:
+            accessibilityService ?? this.accessibilityService,
+        enforcementMethod: enforcementMethod ?? this.enforcementMethod,
       );
 }
 
@@ -102,6 +120,7 @@ abstract interface class IEnforcementBridge {
   Future<PermissionStates> getPermissionStates();
 
   Future<void> requestUsageAccess();
+  Future<void> requestAccessibilityService();
   Future<void> requestOverlayPermission();
   Future<void> requestBatteryExemption();
   Future<void> requestNotificationPermission();

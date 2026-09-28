@@ -53,12 +53,18 @@ final class MethodChannelEnforcementBridge implements IEnforcementBridge {
       notifications: raw['notifications'] == true,
       batteryExempt: raw['batteryExempt'] == true,
       serviceRunning: raw['serviceRunning'] == true,
+      accessibilityService: raw['accessibilityService'] == true,
+      enforcementMethod: raw['enforcementMethod'] as String? ?? 'usageAccess',
     );
   }
 
   @override
   Future<void> requestUsageAccess() =>
       _channel.invokeMethod<void>('requestUsageAccess');
+
+  @override
+  Future<void> requestAccessibilityService() =>
+      _channel.invokeMethod<void>('requestAccessibilityService');
 
   @override
   Future<void> requestOverlayPermission() =>

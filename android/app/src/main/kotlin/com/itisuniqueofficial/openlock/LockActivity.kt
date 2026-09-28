@@ -34,6 +34,7 @@ class LockActivity : FragmentActivity() {
     private var pin = StringBuilder()
     private var failedAttempts = 0
     private var locked = false
+    private var authenticationCompleted = false
 
     /** The real PIN screen (not the decoy) is showing → biometrics apply. */
     private var realLockShown = false
@@ -61,6 +62,13 @@ class LockActivity : FragmentActivity() {
 
         store = ConfigStore(this)
         lockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
+        if (lockedPackage.isBlank()) {
+            finish()
+            return
+        }
+        isActive = true
+        isFinishingNow = false
+        LockSession.beginAuthentication(lockedPackage)
 
         if (store.fakeCoverEnabled()) {
             setContentView(buildDecoyView())
@@ -71,10 +79,12 @@ class LockActivity : FragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Auto-trigger the biometric prompt once every time the real lock
-        // screen appears (deterministic; the in-flight guard prevents the
-        // onCreate + onResume pair from stacking two prompts).
-        if (realLockShown) triggerBiometric()
+        isVisible = true
+    }
+
+    override fun onPause() {
+        isVisible = false
+        super.onPause()
     }
 
     /** Swaps in the real PIN screen and kicks off the biometric prompt. */
@@ -86,7 +96,9 @@ class LockActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        lockedPackage = intent.getStringExtra(EXTRA_PACKAGE) ?: lockedPackage
+        // A single lock screen owns one authentication transaction. A late
+        // app-switch event must not replace its target or create an accidental
+        // unlock for another package.
     }
 
     @Deprecated("Deprecated in Java")
@@ -271,7 +283,9 @@ class LockActivity : FragmentActivity() {
         val hash = store.pinHash()
         val salt = store.pinSalt()
         if (hash == null || salt == null) {
-            unlockAndFinish()
+            messageView.text = "Protection is unavailable"
+            pin = StringBuilder()
+            updateDots()
             return
         }
         if (PinVerifier.verify(pin.toString(), salt, hash, store.pinIterations())) {
@@ -314,7 +328,14 @@ class LockActivity : FragmentActivity() {
     }
 
     private fun unlockAndFinish() {
+        if (authenticationCompleted) return
+        if (!LockSession.markAuthenticated(lockedPackage) &&
+            LockSession.state(lockedPackage) != AuthenticationState.AUTHENTICATED
+        ) return
+        authenticationCompleted = true
         LockSession.markUnlocked(lockedPackage)
+        LockEnforcementManager.onLockActivityFinished(lockedPackage, authenticated = true)
+        isFinishingNow = true
         finish()
     }
 
@@ -365,6 +386,7 @@ class LockActivity : FragmentActivity() {
         }
 
         biometricInFlight = true
+        isAuthenticationPromptVisible = true
         val prompt = BiometricPrompt(
             this,
             ContextCompat.getMainExecutor(this),
@@ -373,6 +395,7 @@ class LockActivity : FragmentActivity() {
                     result: BiometricPrompt.AuthenticationResult,
                 ) {
                     biometricInFlight = false
+                    isAuthenticationPromptVisible = false
                     unlockAndFinish()
                 }
 
@@ -380,9 +403,9 @@ class LockActivity : FragmentActivity() {
                     errorCode: Int,
                     errString: CharSequence,
                 ) {
-                    // Cancel / "Use PIN" / lockout — drop back to the PIN pad;
-                    // do not auto-re-prompt until the screen reappears.
+                    // Cancel / "Use PIN" / lockout — drop back to the PIN pad.
                     biometricInFlight = false
+                    isAuthenticationPromptVisible = false
                 }
 
                 override fun onAuthenticationFailed() {
@@ -398,18 +421,24 @@ class LockActivity : FragmentActivity() {
             .build()
         runCatching { prompt.authenticate(info) }.onFailure {
             biometricInFlight = false
+            isAuthenticationPromptVisible = false
         }
     }
 
     // --- Helpers ------------------------------------------------------------
 
     private fun goHome() {
+        if (!authenticationCompleted) {
+            LockSession.markRelockRequired(lockedPackage)
+            LockEnforcementManager.onLockActivityFinished(lockedPackage, authenticated = false)
+        }
+        isFinishingNow = true
+        finish()
         val home = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_HOME)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         runCatching { startActivity(home) }
-        finish()
     }
 
     private fun appLabel(pkg: String): String {
@@ -428,10 +457,30 @@ class LockActivity : FragmentActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        isActive = false
+        isVisible = false
+        isAuthenticationPromptVisible = false
+        LockEnforcementManager.onLockActivityDestroyed(lockedPackage, isFinishing)
         super.onDestroy()
     }
 
     companion object {
+        @Volatile
+        var isActive: Boolean = false
+            private set
+
+        @Volatile
+        var isVisible: Boolean = false
+            private set
+
+        @Volatile
+        var isAuthenticationPromptVisible: Boolean = false
+            private set
+
+        @Volatile
+        var isFinishingNow: Boolean = false
+            private set
+
         const val EXTRA_PACKAGE = "package"
         private const val MIN_PIN = 6
         private const val MAX_FREE_ATTEMPTS = 5

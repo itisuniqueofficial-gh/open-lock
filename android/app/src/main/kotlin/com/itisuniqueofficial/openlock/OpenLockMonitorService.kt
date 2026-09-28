@@ -1,193 +1,142 @@
 package com.itisuniqueofficial.openlock
 
+import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.ServiceInfo
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import java.util.Calendar
-import java.util.concurrent.ConcurrentHashMap
+import android.provider.Settings
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Persistent foreground service that detects the current foreground app via
- * [UsageStatsManager] and throws up [LockActivity] over any locked app that is
- * not currently in an unlocked session (per relock policy + schedules).
+ * Usage Access enforcement source. This service exists only when the user
+ * selected Usage Access; Accessibility mode has no polling service and no
+ * Open Lock foreground notification.
+ *
+ * UsageStatsManager has no foreground-change callback, so this is a deliberately
+ * slow, deduplicated poll (one query per second, from the last query boundary).
+ * It is not a Flutter process and never starts a Dart isolate.
  */
 class OpenLockMonitorService : Service() {
-
-    private lateinit var store: ConfigStore
     private lateinit var usageStatsManager: UsageStatsManager
+    private lateinit var store: ConfigStore
     private val handler = Handler(Looper.getMainLooper())
-
-    private val leftAppAt = ConcurrentHashMap<String, Long>()
-    @Volatile private var screenOffAt: Long = 0L
-    private var lastForegroundPkg: String? = null
-    private var lastLaunchedPkg: String? = null
-    private var lastLaunchAt: Long = 0L
-
-    private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> screenOffAt = System.currentTimeMillis()
-            }
-        }
-    }
-
-    /**
-     * Auto-lock newly installed apps when the user enabled "Lock newly
-     * installed apps". Registered dynamically (context-registered receivers
-     * still receive ACTION_PACKAGE_ADDED on Android 8+, unlike manifest ones).
-     * Only brand-new installs count — package replacements/updates are ignored.
-     */
-    private val packageAddedReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != Intent.ACTION_PACKAGE_ADDED) return
-            if (intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return
-            if (!store.lockNewApps() || store.pinHash() == null) return
-            val pkg = intent.data?.schemeSpecificPart ?: return
-            if (pkg == packageName) return
-            store.addAutoLocked(pkg)
-        }
-    }
+    private var lastQueryAt = 0L
+    private var lastForeground: Pair<String, String?>? = null
+    private val started = AtomicBoolean(false)
 
     private val poller = object : Runnable {
         override fun run() {
+            if (!started.get()) return
             try {
-                tick()
+                if (!isUsageAccessGranted(this@OpenLockMonitorService) ||
+                    !Settings.canDrawOverlays(this@OpenLockMonitorService) ||
+                    store.enforcementMethod() != LockEnforcementManager.METHOD_USAGE
+                ) {
+                    stopSelf()
+                    return
+                }
+                pollForeground()
             } catch (_: Exception) {
-                // Never let a transient failure kill the loop.
+                // A transient UsageStats/OEM error should not kill the service.
             }
-            handler.postDelayed(this, POLL_INTERVAL_MS)
+            if (started.get()) handler.postDelayed(this, POLL_INTERVAL_MS)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         store = ConfigStore(this)
-        usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
-        val packageFilter = IntentFilter(Intent.ACTION_PACKAGE_ADDED).apply {
-            addDataScheme("package")
-        }
-        registerReceiver(packageAddedReceiver, packageFilter)
+        usageStatsManager =
+            getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        LockEnforcementManager.onUsageStarted(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (store.enforcementMethod() != LockEnforcementManager.METHOD_USAGE ||
+            store.pinHash() == null ||
+            !store.hasEnforcementWork() ||
+            !isUsageAccessGranted(this) ||
+            !Settings.canDrawOverlays(this)
+        ) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
+
+        try {
+            startAsForeground()
+        } catch (_: Exception) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
+
+        started.set(true)
         isRunning = true
+        lastQueryAt = 0L
         handler.removeCallbacks(poller)
         handler.post(poller)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        started.set(false)
         isRunning = false
         handler.removeCallbacks(poller)
-        runCatching { unregisterReceiver(screenReceiver) }
-        runCatching { unregisterReceiver(packageAddedReceiver) }
+        LockEnforcementManager.onUsageStopped()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun tick() {
-        val foreground = foregroundApp() ?: return
-        val current = foreground.first
-        val currentClass = foreground.second
+    private fun startAsForeground() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun pollForeground() {
         val now = System.currentTimeMillis()
-
-        // Track departures from the foreground for the relock policy.
-        val previous = lastForegroundPkg
-        if (previous != null && previous != current) {
-            leftAppAt[previous] = now
-        }
-        lastForegroundPkg = current
-
-        // Never lock ourselves.
-        if (current == packageName) return
-
-        // Uninstall protection: guard the OS deactivate-admin / app-info /
-        // uninstall screens (best-effort; see LockLogic + README). Runs before
-        // the normal locked-app check because Settings is not in the locked set.
-        if (store.pinHash() != null &&
-            LockLogic.shouldGuardUninstall(store.preventUninstall(), current, currentClass)
-        ) {
-            // Respect an in-session unlock so the user can actually reach the
-            // deactivate screen after authenticating; re-lock once the screen
-            // has turned off since.
-            val unlockedAt = LockSession.unlockedAt(current)
-            val stillUnlocked = unlockedAt != 0L && screenOffAt <= unlockedAt
-            if (!stillUnlocked &&
-                !(current == lastLaunchedPkg && now - lastLaunchAt < RELAUNCH_GUARD_MS)
-            ) {
-                lastLaunchedPkg = current
-                lastLaunchAt = now
-                launchLock(current)
-            }
-            return
-        }
-
-        val locked = HashSet(store.lockedPackages())
-        locked.addAll(LockLogic.scheduledLockedPackages(store.schedules(), Calendar.getInstance()))
-        locked.addAll(store.autoLockedPackages())
-        if (!locked.contains(current)) return
-
-        // No PIN configured yet → nothing to enforce.
-        if (store.pinHash() == null) return
-
-        val shouldLock = LockLogic.isLocked(
-            mode = store.relockMode(),
-            timeoutMinutes = store.relockTimeoutMinutes(),
-            unlockedAt = LockSession.unlockedAt(current),
-            leftAppAt = leftAppAt[current] ?: 0L,
-            screenOffAt = screenOffAt,
-            now = now,
-        )
-        if (!shouldLock) return
-
-        // Debounce so we don't stack multiple lock screens for the same app.
-        if (current == lastLaunchedPkg && now - lastLaunchAt < RELAUNCH_GUARD_MS) return
-        lastLaunchedPkg = current
-        lastLaunchAt = now
-        launchLock(current)
-    }
-
-    private fun launchLock(packageName: String) {
-        val intent = Intent(this, LockActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            putExtra(LockActivity.EXTRA_PACKAGE, packageName)
-        }
-        runCatching { startActivity(intent) }
-    }
-
-    /** The latest foreground (package, activityClass). Class name powers the
-     *  best-effort uninstall-screen guard; it may be null on some devices. */
-    private fun foregroundApp(): Pair<String, String?>? {
-        val end = System.currentTimeMillis()
-        val begin = end - LOOKBACK_MS
-        val events = usageStatsManager.queryEvents(begin, end)
-        var pkg: String? = null
-        var cls: String? = null
+        val begin = if (lastQueryAt == 0L) now - INITIAL_LOOKBACK_MS else lastQueryAt
+        val events = usageStatsManager.queryEvents(begin, now + 1L)
         val event = UsageEvents.Event()
+        var newest: Pair<String, String?>? = null
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                pkg = event.packageName
-                cls = event.className
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    event.eventType == UsageEvents.Event.ACTIVITY_RESUMED)
+            ) {
+                val pkg = event.packageName?.takeIf { it.isNotBlank() } ?: continue
+                newest = pkg to event.className
             }
         }
-        return pkg?.let { Pair(it, cls) }
+        lastQueryAt = now
+        if (newest != null) lastForeground = newest
+        lastForeground?.let { (pkg, cls) ->
+            LockEnforcementManager.onForegroundPackage(
+                method = LockEnforcementManager.METHOD_USAGE,
+                packageName = pkg,
+                className = cls,
+            )
+        }
     }
 
     private fun buildNotification(): Notification {
@@ -195,10 +144,10 @@ class OpenLockMonitorService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "App lock protection",
+                "Usage Access protection",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Shown while Open Lock is guarding your apps."
+                description = "Required while Usage Access enforcement is selected."
                 setShowBadge(false)
             }
             manager.createNotificationChannel(channel)
@@ -213,7 +162,6 @@ class OpenLockMonitorService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
-
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -222,7 +170,7 @@ class OpenLockMonitorService : Service() {
         }
         return builder
             .setContentTitle("Open Lock is protecting your apps")
-            .setContentText("Locked apps stay behind your PIN.")
+            .setContentText("Usage Access enforcement is enabled.")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .setContentIntent(pending)
@@ -236,8 +184,52 @@ class OpenLockMonitorService : Service() {
 
         private const val CHANNEL_ID = "openlock_monitor"
         private const val NOTIFICATION_ID = 4711
-        private const val POLL_INTERVAL_MS = 300L
-        private const val LOOKBACK_MS = 10_000L
-        private const val RELAUNCH_GUARD_MS = 1_500L
+        private const val POLL_INTERVAL_MS = 1_000L
+        private const val INITIAL_LOOKBACK_MS = 10_000L
+
+        fun hasUsageAccess(context: Context): Boolean = isUsageAccessGranted(context)
+
+        fun startIfNeeded(context: Context) {
+            val appContext = context.applicationContext
+            val store = ConfigStore(appContext)
+            if (store.enforcementMethod() != LockEnforcementManager.METHOD_USAGE ||
+                store.pinHash() == null ||
+                !store.hasEnforcementWork() ||
+                !isUsageAccessGranted(appContext) ||
+                !Settings.canDrawOverlays(appContext)
+            ) return
+
+            val intent = Intent(appContext, OpenLockMonitorService::class.java)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    appContext.startForegroundService(intent)
+                } else {
+                    appContext.startService(intent)
+                }
+            }
+        }
+
+        private fun isUsageAccessGranted(context: Context): Boolean {
+            return try {
+                val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    appOps.unsafeCheckOpNoThrow(
+                        AppOpsManager.OPSTR_GET_USAGE_STATS,
+                        android.os.Process.myUid(),
+                        context.packageName,
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    appOps.checkOpNoThrow(
+                        AppOpsManager.OPSTR_GET_USAGE_STATS,
+                        android.os.Process.myUid(),
+                        context.packageName,
+                    )
+                }
+                mode == AppOpsManager.MODE_ALLOWED
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 }

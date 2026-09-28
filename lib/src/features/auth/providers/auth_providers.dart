@@ -35,6 +35,9 @@ final class SessionNotifier extends Notifier<AuthStatus> {
   /// First-run PIN creation. Pushes the initial config to native and unlocks.
   Future<void> completeSetup(String pin) async {
     await ref.read(pinAuthServiceProvider).setupPin(pin);
+    // The native verifier is only useful when it is pushed together with the
+    // loaded policy. Do not race the config provider on first launch.
+    await ref.read(configControllerProvider.future);
     await ref.read(configControllerProvider.notifier).pushToNative();
     state = AuthStatus.unlocked;
   }

@@ -1,6 +1,33 @@
 import 'package:openlock/src/features/enforcement/models/relock_policy.dart';
 import 'package:openlock/src/features/schedules/models/lock_schedule.dart';
 
+enum EnforcementMethod {
+  accessibility,
+  usageAccess,
+}
+
+extension EnforcementMethodValues on EnforcementMethod {
+  String get storageValue => switch (this) {
+        EnforcementMethod.accessibility => 'accessibility',
+        EnforcementMethod.usageAccess => 'usageAccess',
+      };
+
+  String get displayName => switch (this) {
+        EnforcementMethod.accessibility => 'Accessibility Service',
+        EnforcementMethod.usageAccess => 'Usage Access',
+      };
+
+  String get shortName => switch (this) {
+        EnforcementMethod.accessibility => 'Accessibility',
+        EnforcementMethod.usageAccess => 'Usage Access',
+      };
+}
+
+EnforcementMethod enforcementMethodFromStorage(String? value) =>
+    value == EnforcementMethod.accessibility.storageValue
+        ? EnforcementMethod.accessibility
+        : EnforcementMethod.usageAccess;
+
 /// The Flutter-side source of truth for everything the lock behaves by. Stored
 /// encrypted at rest (AES-256-GCM, key in secure storage). The *subset* the
 /// native monitor needs is projected via [toNativeMap] and pushed into the
@@ -8,6 +35,7 @@ import 'package:openlock/src/features/schedules/models/lock_schedule.dart';
 final class LockConfig {
   const LockConfig({
     this.lockedPackages = const {},
+    this.enforcementMethod = EnforcementMethod.usageAccess,
     this.lockNewApps = false,
     this.relock = const RelockPolicy(),
     this.randomizeKeypad = false,
@@ -20,6 +48,10 @@ final class LockConfig {
 
   /// Apps locked at all times (user toggles in the app picker).
   final Set<String> lockedPackages;
+
+  /// Native enforcement source selected by the user. The native layer never
+  /// enables either special access on its own.
+  final EnforcementMethod enforcementMethod;
 
   /// Automatically lock apps installed after this was turned on.
   final bool lockNewApps;
@@ -48,6 +80,7 @@ final class LockConfig {
 
   LockConfig copyWith({
     Set<String>? lockedPackages,
+    EnforcementMethod? enforcementMethod,
     bool? lockNewApps,
     RelockPolicy? relock,
     bool? randomizeKeypad,
@@ -59,6 +92,7 @@ final class LockConfig {
   }) =>
       LockConfig(
         lockedPackages: lockedPackages ?? this.lockedPackages,
+        enforcementMethod: enforcementMethod ?? this.enforcementMethod,
         lockNewApps: lockNewApps ?? this.lockNewApps,
         relock: relock ?? this.relock,
         randomizeKeypad: randomizeKeypad ?? this.randomizeKeypad,
@@ -72,6 +106,7 @@ final class LockConfig {
 
   Map<String, dynamic> toJson() => {
         'lockedPackages': lockedPackages.toList()..sort(),
+        'enforcementMethod': enforcementMethod.storageValue,
         'lockNewApps': lockNewApps,
         'relock': relock.toJson(),
         'randomizeKeypad': randomizeKeypad,
@@ -86,6 +121,8 @@ final class LockConfig {
         lockedPackages: ((json['lockedPackages'] as List<dynamic>?) ?? const [])
             .map((e) => e as String)
             .toSet(),
+        enforcementMethod:
+            enforcementMethodFromStorage(json['enforcementMethod'] as String?),
         lockNewApps: json['lockNewApps'] as bool? ?? false,
         relock: json['relock'] is Map<String, dynamic>
             ? RelockPolicy.fromJson(json['relock'] as Map<String, dynamic>)
@@ -111,6 +148,7 @@ final class LockConfig {
   }) =>
       {
         'lockedPackages': lockedPackages.toList()..sort(),
+        'enforcementMethod': enforcementMethod.storageValue,
         'lockNewApps': lockNewApps,
         'relockMode': relock.mode.storageValue,
         'relockTimeoutMinutes': relock.timeout.inMinutes,

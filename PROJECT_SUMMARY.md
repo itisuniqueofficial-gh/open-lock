@@ -35,7 +35,7 @@ working-tree edits.
 - `android:allowBackup="false"` + `android:fullBackupContent="false"` added to the manifest.
 
 **Functional gaps fixed**
-- **`lockNewApps` now enforced.** It is forwarded in `LockConfig.toNativeMap`; the monitor service registers a dynamic `ACTION_PACKAGE_ADDED` receiver that adds genuinely-new installs to a native-owned additive `autoLockedPackages` set, unioned into the locked set in `tick()` and counted in `BootReceiver`. The app picker merges these for display and can clear them (`getAutoLockedPackages` / `removeAutoLocked` channel methods).
+- **`lockNewApps` now enforced.** It is forwarded in `LockConfig.toNativeMap`; the manifest `PackagePolicyReceiver` adds genuinely-new installs to a native-owned additive `autoLockedPackages` set, unioned into the selected native manager policy. Removed packages are cleaned up, and the app picker merges these for display and can clear them (`getAutoLockedPackages` / `removeAutoLocked` channel methods).
 - **"Pattern" unlock claim removed** from `pubspec.yaml` description and README (implementation is PIN + biometric; no pattern exists).
 - **Version single-sourced & un-staled:** `AppInfo.version` `1.1.0` → **`1.5.0`** to mirror `pubspec.yaml` `1.5.0+7`; documented that both bump together.
 - **Forgot-PIN:** no insecure bypass added; the absence of recovery is now documented as an intentional limitation (README §Limitations).
@@ -90,9 +90,18 @@ working-tree edits.
 
 OpenLock is an **offline Android app-locker** built as a **Flutter application with a native Kotlin enforcement layer**. It is not a pure-native Android project: the UI, configuration, schedules, authentication logic, and backup/restore are written in Dart; the always-on cross-app locking is implemented in Kotlin because it must run reliably from the background.
 
-The two halves communicate over a single `MethodChannel` named `openlock/enforcement` (`lib/src/core/services/method_channel_enforcement_bridge.dart` ⇄ `android/.../EnforcementPlugin.kt`). The Flutter side is the source of truth for configuration; it pushes an "enforcement subset" (locked packages, relock policy, schedules, PIN verifier hash, feature flags) into native `EncryptedSharedPreferences`, which a foreground service reads.
+### Current native enforcement state (2026-09-28)
 
-Cross-app locking uses **`UsageStatsManager` polling + an overlay `Activity`**, explicitly **not** an `AccessibilityService` (confirmed: no accessibility service is declared or implemented anywhere in the repo). A persistent foreground service (`OpenLockMonitorService.kt`) polls the foreground app every 300 ms and launches a native `LockActivity` over any locked app. The PIN is verified against a salted **PBKDF2-HMAC-SHA256** verifier, with the identical algorithm implemented in both Dart (`pin_hasher.dart`) and Kotlin (`PinVerifier.kt`) so the lock screen works entirely offline.
+- `LockConfig.enforcementMethod` is persisted with the encrypted Flutter config and native projection. Supported values are `accessibility` and `usageAccess`; the user must enable the corresponding Android setting.
+- `LockEnforcementManager` is the one native policy/state owner. It handles app transitions, schedules, relock timestamps, authentication state, and one active `LockActivity` transaction.
+- `OpenLockAccessibilityService` receives only `TYPE_WINDOW_STATE_CHANGED` events and never retrieves window content. `OpenLockMonitorService` is used only for the selected Usage Access method and polls from the last query boundary once per second.
+- `BootReceiver` restores the native projection and starts Usage mode only if the persisted method, lock work, Usage Access, and overlay permission are all currently available. It never grants permissions. Android reconnects an enabled Accessibility service itself.
+- `PackagePolicyReceiver` owns `PACKAGE_ADDED`/`PACKAGE_REMOVED` policy updates, so Lock New Apps does not depend on Flutter or a running monitor service.
+- `ConfigStore` caches the encrypted projection and invalidates that cache on cross-component preference changes; foreground enforcement does not perform repeated encrypted disk reads.
+
+The two halves communicate over a single `MethodChannel` named `openlock/enforcement` (`lib/src/core/services/method_channel_enforcement_bridge.dart` ⇄ `android/.../EnforcementPlugin.kt`). Flutter validates and persists configuration, then pushes an "enforcement subset" (locked packages, selected method, relock policy, schedules, PIN verifier hash, and feature flags) into native `EncryptedSharedPreferences`, which the selected native enforcement component reads.
+
+Cross-app locking now has two explicit, user-selectable native sources: an event-driven `AccessibilityService`, or a `UsageStatsManager` source with a one-second, deduplicated foreground service poll. Only Usage Access mode uses the persistent foreground service and its required notification; Accessibility mode does not start it. Both sources call the single `LockEnforcementManager`, which reads the encrypted native projection and launches the native `LockActivity`. The PIN is verified against a salted **PBKDF2-HMAC-SHA256** verifier, with the identical algorithm implemented in Dart (`pin_hasher.dart`) and Kotlin (`PinVerifier.kt`) so the lock screen works entirely offline.
 
 Optional features include focus schedules, biometric unlock, an intruder log with silent front-camera capture, a decoy "app has stopped" cover, a randomized keypad, device-admin uninstall protection, an encrypted `.olbackup` export/import, and an in-app GitHub update check.
 
@@ -205,7 +214,7 @@ The exact `compileSdk`/`targetSdk` integers are resolved by the Flutter Gradle p
 | Feature | Evidence |
 |---|---|
 | Lock chosen installed apps behind a PIN | `app_picker_screen.dart`, `ConfigController.toggleApp`, `OpenLockMonitorService.tick` |
-| Auto-lock newly installed apps (`lockNewApps` flag) | `lock_config.dart` — **see §17 note: flag stored but not enforced natively** |
+| Auto-lock newly installed apps (`lockNewApps` flag) | `lock_config.dart` + `PackagePolicyReceiver` — native encrypted auto-lock set |
 | Relock policy: immediately / after 1·5·15·30 min / on screen off | `relock_policy.dart`, `LockPolicyEngine`, `LockLogic.isLocked` |
 | Focus schedules (time-window locking, weekday/overnight/all-day) | `lock_schedule.dart`, `LockScheduleEvaluator`, `LockLogic` |
 | PIN unlock with escalating cooldown | `pin_auth_service.dart`, `LockActivity.kt` |
@@ -223,30 +232,30 @@ The exact `compileSdk`/`targetSdk` integers are resolved by the Flutter Gradle p
 
 ## 7. App-Locking Architecture (lock lifecycle)
 
-The mechanism is **`UsageStatsManager` + overlay activity + foreground service** — **not** an AccessibilityService (none exists in the repo).
+The mechanism is a user-selected **AccessibilityService** or **UsageStatsManager + overlay activity + foreground service**. The selected method is persisted in the native encrypted projection.
 
 | # | Step | Responsible mechanism | File |
 |---|---|---|---|
 | 1 | User selects an app to lock | Flutter UI toggles `lockedPackages` | `app_picker_screen.dart`, `ConfigController.toggleApp` |
 | 2 | Lock state persisted | AES-256-GCM config file + push to native `EncryptedSharedPreferences` | `ConfigRepository`, `ConfigStore` |
 | 3 | Monitoring starts | Foreground service started from onboarding / boot | `PermissionsController.startService`, `OpenLockMonitorService.onStartCommand` |
-| 4 | Foreground app detected | `UsageStatsManager.queryEvents` polled every **300 ms**, 10 s look-back | `OpenLockMonitorService.foregroundApp` |
+| 4 | Foreground app detected | Accessibility window-state events, or UsageStats boundary queries every **1 second** in Usage mode | `OpenLockAccessibilityService`, `OpenLockMonitorService` |
 | 5 | Lock screen triggered | `startActivity(LockActivity)` with `FLAG_ACTIVITY_NEW_TASK|NO_ANIMATION` | `OpenLockMonitorService.launchLock` |
-| 6 | Original app hidden | `LockActivity` (`singleInstance`, `excludeFromRecents`, `FLAG_SECURE`) drawn on top; overlay permission exempts background-activity-start | `AndroidManifest.xml`, `LockActivity.onCreate` |
+| 6 | Original app hidden | `LockActivity` (`singleTask`, `excludeFromRecents`, `FLAG_SECURE`) drawn on top; Usage mode uses overlay permission | `AndroidManifest.xml`, `LockActivity.onCreate` |
 | 7 | Auth UI appears | Native keypad + auto-triggered `BiometricPrompt` | `LockActivity.buildLockView`, `triggerBiometric` |
 | 8 | PIN/biometric entered | `PinVerifier.verify` (PBKDF2) or biometric callback | `LockActivity.onSubmit` |
 | 9 | Success / failure | Success → `LockSession.markUnlocked` + `finish()`; failure → cooldown / intruder capture | `LockActivity.unlockAndFinish`, `onWrongPin` |
 | 10 | App allowed / blocked | Unlocked packages tracked in-memory for the session | `LockSession` (in-memory `ConcurrentHashMap`) |
 | 11 | User leaves the app | Departure timestamp recorded per package | `OpenLockMonitorService.tick` (`leftAppAt`) |
 | 12 | Relock decision | `LockLogic.isLocked` (immediately / timeout / screen-off) | `LockLogic`, `LockSession` |
-| 13 | Monitoring continues | Poller reposts every 300 ms; `START_STICKY` | `OpenLockMonitorService.poller` |
+| 13 | Monitoring continues | Accessibility reconnects through Android; Usage mode reposts a one-second poll with `START_STICKY` | `OpenLockAccessibilityService`, `OpenLockMonitorService` |
 
 **Session model:** unlock state lives only in memory (`LockSession`) and is **not persisted** — a reboot re-locks everything (documented in `LockSession.kt`).
 
 **Debounce:** a `RELAUNCH_GUARD_MS = 1500` ms guard prevents stacking multiple lock screens for the same package.
 
 **Visible limitations (from code + README):**
-- **Poll-and-launch race:** 300 ms polling means a locked app is briefly foreground before the lock screen appears (`POLL_INTERVAL_MS = 300`).
+- **Usage mode poll-and-launch race:** UsageStats has no foreground callback, so Usage mode can have a short detection window. Accessibility mode is event-driven and generally responds sooner.
 - **Class-name dependence** for the uninstall guard: `foregroundApp()` relies on `event.className`, which may be null/renamed on some OEMs/newer Android (documented in `README.md` "Honest limits" and `UninstallGuard`/`LockLogic` headers).
 - **OEM battery killing:** mitigated only by an optional battery-exemption request; no other keep-alive.
 
@@ -269,7 +278,7 @@ The mechanism is **`UsageStatsManager` + overlay activity + foreground service**
 | Re-auth gate (disable uninstall protection) | `verifyPin` (does **not** touch the cooldown counter) or biometric | `pin_auth_service.verifyPin`, `settings_screen._authenticateForDisable` |
 | Forgot/reset PIN | **Not found** — no recovery path exists; `eraseAll()` exists but is not wired to a UI reset flow | `pin_auth_service.eraseAll` (searched; no caller in UI) |
 
-**Why authentication could fail (from code):** if the native `pinIterations`/algorithm ever drift from the Dart side, the lock screen's PBKDF2 output won't match (both hardcode `120000`); if the Keystore fails and `ConfigStore` falls back to plain prefs (see §10), a mismatch or reset of the pushed verifier is possible. No runtime bug was reproduced.
+**Why authentication could fail (from code):** if the native `pinIterations`/algorithm ever drift from the Dart side, the lock screen's PBKDF2 output won't match (both hardcode `120000`); if the Keystore fails, the native store deliberately becomes non-persistent and protection is unavailable until it recovers. No plaintext verifier fallback is used.
 
 ---
 
@@ -295,16 +304,18 @@ The mechanism is **`UsageStatsManager` + overlay activity + foreground service**
 
 | Component | Type | Exported | Notes |
 |---|---|---|---|
-| `MainActivity` | Activity (`FlutterFragmentActivity`) | **true** (LAUNCHER) | `singleTop`, `taskAffinity=""`; hosts the MethodChannel. No `FLAG_SECURE` (see §10). |
-| `LockActivity` | Activity | **false** | `singleInstance`, `taskAffinity="…​.lock"`, `excludeFromRecents`, `showWhenLocked`, `turnScreenOn`, `FLAG_SECURE` set in code |
+| `MainActivity` | Activity (`FlutterFragmentActivity`) | **true** (LAUNCHER) | `singleTop`, `taskAffinity=""`, `FLAG_SECURE`; hosts the MethodChannel. |
+| `LockActivity` | Activity | **false** | `singleTask`, dedicated lock affinity, `excludeFromRecents`, `showWhenLocked`, `turnScreenOn`, `FLAG_SECURE` set in code |
 | `OpenLockMonitorService` | Service | **false** | `foregroundServiceType="specialUse"` with declared subtype |
 | `OpenLockDeviceAdminReceiver` | Receiver | **true** | Guarded by `BIND_DEVICE_ADMIN`; `DEVICE_ADMIN_ENABLED` filter |
-| `BootReceiver` | Receiver | **true** | `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED` |
+| `BootReceiver` | Receiver | **true** | `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED`; starts Usage Access service only when selected and actually authorized |
+| `OpenLockAccessibilityService` | AccessibilityService | **true** | User-enabled, event-driven source; no content retrieval |
+| `PackagePolicyReceiver` | Receiver | **false** | Native `PACKAGE_ADDED` / `PACKAGE_REMOVED` handling for Lock New Apps |
 
-- **UsageStats:** `EnforcementPlugin.hasUsageAccess` uses `AppOpsManager.OPSTR_GET_USAGE_STATS`; polling via `UsageStatsManager.queryEvents`.
+- **UsageStats:** `EnforcementPlugin.hasUsageAccess` uses `AppOpsManager.OPSTR_GET_USAGE_STATS`; event queries via `UsageStatsManager.queryEvents` (one-second boundary-based polling only in Usage Access mode).
 - **Overlay:** `Settings.canDrawOverlays`; request via `ACTION_MANAGE_OVERLAY_PERMISSION`.
 - **Device admin:** `device_admin.xml` declares only `force-lock` "to satisfy the policy schema"; the receiver overrides only `onDisableRequested`. It never locks/wipes. Deactivation is auth-gated (`PreventUninstallController.disableWithAuth`).
-- **Accessibility Service:** **Not found / not used** (intentional, per README).
+- **Accessibility Service:** Declared with only `typeWindowStateChanged`, generic feedback, a 100 ms notification timeout, and `canRetrieveWindowContent=false`; it is enabled only by the user in Android Settings.
 
 ---
 
@@ -318,14 +329,12 @@ Format: **FACT** (what the code does) → **RISK** → **RECOMMENDATION**. Nothi
 - RECOMMENDATION: Consider a memory-hard KDF (Argon2id, already available via `core_crypto` and used for backups) for the unlock verifier, or increase iterations, balanced against on-unlock latency.
 
 **B. EncryptedSharedPreferences fallback**
-- FACT: `ConfigStore.createPrefs` catches Keystore failures and falls back to **plaintext** `getSharedPreferences(MODE_PRIVATE)` so the service "still functions rather than crashing" (`ConfigStore.kt`).
-- RISK: In that rare fallback path the pushed config **including the PIN verifier hash + salt and locked-app list** would be stored unencrypted in app-private prefs.
-- RECOMMENDATION: On Keystore failure, fail closed (refuse to persist the verifier) or surface an explicit degraded-security state rather than silently writing plaintext.
+- FACT: `ConfigStore.createPrefs` retries the encrypted store and then falls back to a **non-persistent in-memory** store on Keystore failure (`ConfigStore.kt`).
+- RESULT: The pushed config, PIN verifier, and locked-app list are never written to plaintext preferences. Protection degrades closed until encrypted storage recovers.
 
-**C. Recents / screenshot exposure of the main app**
-- FACT: `FLAG_SECURE` is set **only** on `LockActivity` (`LockActivity.kt:48`). `MainActivity` (which hosts the unlock PIN pad, settings, and the **intruder log with photos**) sets no `FLAG_SECURE` and is not `excludeFromRecents`.
-- RISK: The app-open PIN entry, intruder photos, and locked-app list can appear in the Recents thumbnail and be screenshotted.
-- RECOMMENDATION: Apply `FLAG_SECURE` to the Flutter `MainActivity` (or gate it on sensitive screens) to match the protection already given to `LockActivity`.
+**C. Recents / screenshot exposure**
+- FACT: `FLAG_SECURE` is set on both `MainActivity` and `LockActivity`; the lock activity is excluded from Recents.
+- RESULT: PIN entry, the locked-app list, settings, and intruder photos are not exposed in screenshots or Recents previews.
 
 **D. "Offline-only" claim vs. network code**
 - FACT: `README.md` states "Offline-only. **No network code**, nothing to leak," yet the app declares `INTERNET` + `REQUEST_INSTALL_PACKAGES` and ships `GithubUpdateService` performing a GitHub release lookup + APK download-and-install (`di.dart`, `settings_screen.dart` `_UpdateSection`).
@@ -353,9 +362,7 @@ Format: **FACT** (what the code does) → **RISK** → **RECOMMENDATION**. Nothi
 - RECOMMENDATION: Consider encrypting captured photos and explicitly disabling cloud/auto-backup for them.
 
 **I. Backup manifest flags**
-- FACT: The manifest sets no `android:allowBackup` and no `android:dataExtractionRules`/`fullBackupContent`; `android:debuggable` is not set (no override); no cleartext-traffic config present.
-- RISK: With `allowBackup` unspecified, the platform default (historically `true`) may allow ADB/cloud backup of app-private data on some API levels.
-- RECOMMENDATION: Explicitly set `android:allowBackup="false"` (or precise data-extraction rules) for a security app.
+- FACT: The manifest explicitly sets `android:allowBackup="false"` and `android:fullBackupContent="false"`.
 
 **J. Logging**
 - FACT: No `print(...)` in Dart and no `android.util.Log` calls in Kotlin were found (grep across `lib/` and `android/`).
@@ -369,7 +376,7 @@ Format: **FACT** (what the code does) → **RISK** → **RECOMMENDATION**. Nothi
 |---|---|---|---|---|
 | Secure key/value | `flutter_secure_storage` (AndroidKeyStore) | `di.dart`, `storage_keys.dart` | Config-encryption key, PIN hash+salt, failed attempts, lockout, biometric flag, onboarding flag, update-autocheck | Hardware-backed where available |
 | Encrypted config file | AES-256-GCM (`core_crypto`) blob on disk | `config_repository.dart`, `DocumentsConfigFileStore` (`openlock_config.bin`) | Full `LockConfig` (locked apps, schedules, flags) | Random 256-bit key in secure storage |
-| Native enforcement store | `EncryptedSharedPreferences` (AES256-SIV/GCM) | `ConfigStore.kt` (`openlock_enforcement`) | Enforcement subset + PIN verifier + intruder log | Falls back to plaintext prefs on Keystore failure (see §10-B) |
+| Native enforcement store | `EncryptedSharedPreferences` (AES256-SIV/GCM) | `ConfigStore.kt` (`openlock_enforcement`) | Enforcement subset + PIN verifier + intruder log | Cached; non-persistent fail-closed memory fallback on Keystore failure |
 | In-memory session | `ConcurrentHashMap` | `LockSession.kt` | Per-package unlock timestamps | Not persisted (reboot clears) |
 | Intruder photos | JPEG files | `IntruderCapture.kt` (`filesDir/intruders/`) | Front-camera captures | App-private, unencrypted files |
 | Encrypted backup | JSON envelope, AES-256-GCM + Argon2id | `backup_codec.dart` (`.olbackup`) | Exported `LockConfig` | Passphrase-derived key, zeroized |
@@ -512,7 +519,7 @@ Signing secrets are referenced by name only (`RELEASING.md`); **no secret values
 - Guided permissions checklist.
 
 ### Partially Implemented
-- **`lockNewApps` ("Lock newly installed apps automatically")**: the flag exists in `LockConfig` and is settable (`ConfigController.setLockNewApps`), but it is **excluded from `toNativeMap`** and there is **no package-added receiver or native logic** enforcing it. As shipped, toggling it has no runtime effect on the native monitor. *(Verified: no `PACKAGE_ADDED` receiver; `lockNewApps` not read in Kotlin.)*
+- **`lockNewApps`**: the setting is included in the native projection and enforced by `PackagePolicyReceiver`, which persists a native-owned additive auto-locked package set. Updates are ignored and removed packages are cleaned up.
 - **Backup UX**: export/import work against a single fixed file in app storage; there is no share-sheet/file-picker (`backup_screen.dart` comment acknowledges this as future work).
 - **PIN reset/recovery**: `eraseAll()` exists but is not wired to any "forgot PIN" UI flow.
 
@@ -534,16 +541,23 @@ Signing secrets are referenced by name only (`RELEASING.md`); **no secret values
 
 ## 18. Known Limitations (evidence-backed)
 
-1. **Poll-and-launch race** (300 ms) allows a brief glimpse of a locked app before the overlay appears — `OpenLockMonitorService`.
-2. **Uninstall screen guard is best-effort** and OEM/Android-version dependent; may over-trigger on unrelated app-info screens — `UninstallGuard`/`LockLogic`, README "Honest limits."
-3. **Dual-implementation drift risk**: relock/schedule/PIN logic is hand-mirrored in Dart and Kotlin with no native tests to catch divergence.
-4. **`lockNewApps` is inert** at runtime (see §17).
-5. **Main app has no `FLAG_SECURE`** — Recents/screenshot exposure of PIN entry and intruder photos (§10-C).
-6. **Silent plaintext fallback** for the native store on Keystore failure (§10-B); **silent empty-config fallback** on decrypt failure (§10-G).
-7. **"No network code" privacy claim is inaccurate** given the update feature (§10-D); README also advertises "pattern" unlock that is not implemented.
-8. **`AppInfo.version` (1.1.0) is stale** vs. `pubspec.yaml` (1.4.1+6), so backup envelopes record the wrong app version.
-9. **Committed `pubspec.lock` reflects local path deps**, not the git refs in `pubspec.yaml` (§13).
-10. **Silent camera capture is device-dependent** and unverifiable without hardware (documented in `IntruderCapture.kt`).
+1. **Usage mode detection window:** UsageStats does not provide a foreground
+   callback; Accessibility mode avoids this poll and is generally more
+   immediate.
+2. **Accessibility delivery varies:** Android and OEMs may restrict or alter
+   window-state events. The UI reports when the service is disabled.
+3. **Uninstall screen guard is best-effort** and OEM/Android-version dependent;
+   it may over-trigger on unrelated app-info screens.
+4. **Dual-implementation drift risk:** relock/schedule/PIN logic is mirrored in
+   Dart and Kotlin; native JVM tests remain a future improvement.
+5. **Flutter config decrypt failures** still use the existing repository recovery
+   behavior and should be surfaced by future UI work.
+6. **The update feature is optional network activity**, not telemetry; downloaded
+   update integrity remains an improvement area.
+7. **Silent camera capture is device-dependent** and unverifiable without
+   physical hardware.
+8. **Android may stop components or withhold package broadcasts after a force
+   stop.** No supported implementation can guarantee execution forever.
 
 ---
 
@@ -551,16 +565,10 @@ Signing secrets are referenced by name only (`RELEASING.md`); **no secret values
 
 Prioritized by security/reliability impact. Recommendations are **not** implemented in the current code.
 
-### Critical
-- **Set `FLAG_SECURE` on `MainActivity`** (and/or sensitive Flutter screens) to stop Recents/screenshot leakage of PIN entry, intruder photos, and the locked-app list.
-- **Do not fall back to plaintext prefs** on Keystore failure (`ConfigStore`); fail closed for the PIN verifier.
-- **Set `android:allowBackup="false"`** (or precise data-extraction rules) so app-private lock data/photos aren't exposed to ADB/cloud backup.
-
 ### High
-- **Add native (JVM) tests** for `LockLogic`, `PinVerifier`, and the config parsing, or extract the shared logic into a single cross-compiled source to eliminate Dart↔Kotlin drift.
-- **Correct the privacy documentation** ("no network code") and **verify update APK integrity** before install (`REQUEST_INSTALL_PACKAGES`).
-- **Implement or remove `lockNewApps`** and the "pattern" claim to match documentation.
-- **Strengthen the unlock KDF** (Argon2id or higher iterations) for the short numeric PIN.
+- **Add native (JVM) tests** for `LockLogic`, `PinVerifier`, `LockSession`, and native config parsing to reduce Dart↔Kotlin drift further.
+- **Verify update APK integrity/signature** before installation; this remains separate from the native app-lock path.
+- **Strengthen the unlock KDF** (Argon2id or higher iterations) for the short numeric PIN, balanced against native lock-screen latency.
 
 ### Medium
 - Surface a **decrypt-failure warning** instead of silently reverting to an empty (unprotected) config.
@@ -646,4 +654,4 @@ This summary was produced by **static inspection** of the repository at commit `
 
 ## 24. Final Technical Notes
 
-OpenLock is a **coherent, well-structured, offline-first Flutter+Kotlin app-locker** with a clean interface seam, strong test coverage of its **pure Dart logic**, encrypted-at-rest configuration, and a realistic, self-documented understanding of the limits of the UsageStats-based technique. Its main gaps are (1) the untested, hand-mirrored native enforcement layer that risks Dart↔Kotlin drift, (2) a few security hardening items — notably the absence of `FLAG_SECURE` on the main app, the plaintext-prefs Keystore fallback, and unspecified `allowBackup`, and (3) documentation that overstates "no network code" and advertises unimplemented "pattern" unlock plus an inert `lockNewApps` toggle. None of these are blocking defects in the core lock path, and all are addressable without architectural change. The project builds its dependency graph cleanly and passes analysis and its logic test suite; a fully reproducible build additionally requires a Flutter SDK compatible with the pinned `core_*` packages (the repo's CI uses Flutter 3.41.3).
+OpenLock is a **coherent, well-structured, offline-first Flutter+Kotlin app-locker** with a clean interface seam, strong test coverage of its **pure Dart logic**, encrypted-at-rest configuration, and a realistic, self-documented understanding of the limits of the Accessibility and UsageStats techniques. Its main gaps are (1) the untested, hand-mirrored native enforcement layer that risks Dart↔Kotlin drift, (2) a few security hardening items — notably platform-dependent background limits and native/JVM test coverage, and (3) documentation that overstates "no network code" and advertises unimplemented "pattern" unlock plus the platform-dependent package-broadcast boundary for `lockNewApps`. None of these are blocking defects in the core lock path, and all are addressable without architectural change. The project builds its dependency graph cleanly and passes analysis and its logic test suite; a fully reproducible build additionally requires a Flutter SDK compatible with the pinned `core_*` packages (the repo's CI uses Flutter 3.41.3).
