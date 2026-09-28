@@ -49,6 +49,11 @@ void main() {
     expect(find.text('Protection not active yet'), findsOneWidget);
     expect(find.text('Usage access'), findsOneWidget);
     expect(find.text('Display over other apps'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Ignore battery optimization'),
+      300,
+      scrollable: find.byType(Scrollable),
+    );
     expect(find.text('Ignore battery optimization'), findsOneWidget);
     // Two required permissions ungranted → two "Grant" buttons at least.
     expect(find.text('Grant'), findsWidgets);
