@@ -100,7 +100,8 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
               onChanged: _selectMethod,
             ),
             const SizedBox(height: AppSpacing.lg),
-            const Text('2. Enable the selected permission', style: AppTextStyles.h4),
+            const Text('2. Enable the selected permission',
+                style: AppTextStyles.h4),
             const SizedBox(height: AppSpacing.sm),
             if (method == EnforcementMethod.accessibility) ...[
               _PermissionTile(
