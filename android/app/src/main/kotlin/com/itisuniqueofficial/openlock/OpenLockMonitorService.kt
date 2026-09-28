@@ -6,7 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.app.ServiceInfo
+import android.content.pm.ServiceInfo
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
