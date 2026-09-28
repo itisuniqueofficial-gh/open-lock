@@ -92,7 +92,23 @@ jobs:
         run: dart analyze --fatal-infos
 
       - name: Test
-        run: flutter test
+        run: |
+          set +e
+          flutter test --machine > /tmp/open-lock-test.json
+          code=$?
+          cat /tmp/open-lock-test.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for line in Path('/tmp/open-lock-test.json').read_text().splitlines():
+              try:
+                  event = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if event.get('type') == 'error':
+                  print('::error::' + event.get('error', 'Flutter test error').replace('\n', ' | '))
+          PY
+          exit $code
 
       - name: Build debug APK
         run: flutter build apk --debug
