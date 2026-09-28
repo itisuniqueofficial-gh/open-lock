@@ -89,7 +89,15 @@ jobs:
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze (zero tolerance)
-        run: dart analyze --fatal-infos
+        run: |
+          set +e
+          dart analyze --format machine --fatal-infos > /tmp/open-lock-analyze.txt
+          code=$?
+          cat /tmp/open-lock-analyze.txt
+          while IFS= read -r line; do
+            echo "::error::$line"
+          done < /tmp/open-lock-analyze.txt
+          exit $code
 
       - name: Test
         run: flutter test
